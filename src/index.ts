@@ -11,7 +11,7 @@ import {
 import { chromium, Browser, Page, BrowserContext, _electron as electron, ElectronApplication } from 'playwright';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, createWriteStream, WriteStream } from 'fs';
 import { platform } from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -31,6 +31,7 @@ interface BrowserSession {
   pages: Map<string, Page>;
   lastActivity: number; // Track last activity time
   createdAt: number; // Track creation time
+  logStreams: Map<string, WriteStream>; // Log streams for each page
 }
 
 interface ElectronSession {
@@ -71,6 +72,7 @@ class PlaywrightMCPServer {
   private recordings: Map<string, TestRecording> = new Map();
   private screenshotDir: string;
   private testDir: string;
+  private logDir: string;
   private cleanupTimer?: NodeJS.Timeout;
   private isShuttingDown = false;
 
@@ -87,16 +89,25 @@ class PlaywrightMCPServer {
       }
     );
 
+    // Setup playwright base directory
+    const playwrightBaseDir = join(process.cwd(), 'playwright');
+    
     // Setup screenshot directory
-    this.screenshotDir = join(process.cwd(), 'screenshots');
+    this.screenshotDir = join(playwrightBaseDir, 'screenshot');
     if (!existsSync(this.screenshotDir)) {
       mkdirSync(this.screenshotDir, { recursive: true });
     }
 
     // Setup test directory
-    this.testDir = join(process.cwd(), 'generated-tests');
+    this.testDir = join(playwrightBaseDir, 'test');
     if (!existsSync(this.testDir)) {
       mkdirSync(this.testDir, { recursive: true });
+    }
+
+    // Setup log directory for console logs
+    this.logDir = join(playwrightBaseDir, 'log');
+    if (!existsSync(this.logDir)) {
+      mkdirSync(this.logDir, { recursive: true });
     }
 
     this.setupHandlers();
@@ -771,10 +782,14 @@ class PlaywrightMCPServer {
       context,
       pages: new Map([['main', page]]),
       lastActivity: now,
-      createdAt: now
+      createdAt: now,
+      logStreams: new Map()
     };
 
     this.sessions.set(sessionId, session);
+    
+    // Setup console logging for the main page
+    this.setupPageLogging(sessionId, 'main', page);
 
     return {
       content: [{
@@ -796,6 +811,8 @@ class PlaywrightMCPServer {
     }
 
     try {
+      // Close log streams first
+      this.closeLogStreams(sessionId);
       await session.browser.close();
     } catch (error) {
       console.error(`Error closing browser ${sessionId}:`, error);
@@ -1636,6 +1653,74 @@ ${this.generateActionSteps(actions, '    ', 'mocha')}
 
 ${testScripts.join('\n\n')}
 `;
+  }
+
+  // Setup console logging for a page
+  private setupPageLogging(sessionId: string, pageId: string, page: Page) {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+
+    // Create log file stream
+    const logFileName = `console-${sessionId}-${pageId}-${Date.now()}.log`;
+    const logFilePath = join(this.logDir, logFileName);
+    const logStream = createWriteStream(logFilePath, { flags: 'a' });
+    
+    // Store log stream reference
+    session.logStreams.set(pageId, logStream);
+
+    // Write header
+    logStream.write(`=== Console Log Started: ${new Date().toISOString()} ===\n`);
+    logStream.write(`Session: ${sessionId}, Page: ${pageId}\n`);
+    logStream.write(`URL: ${page.url()}\n`);
+    logStream.write(`${'='.repeat(50)}\n\n`);
+
+    // Listen to console events
+    page.on('console', msg => {
+      const timestamp = new Date().toISOString();
+      const type = msg.type().toUpperCase();
+      const text = msg.text();
+      const location = msg.location();
+      
+      // Format log entry
+      let logEntry = `[${timestamp}] [${type}]`;
+      if (location.url) {
+        logEntry += ` [${location.url}:${location.lineNumber}:${location.columnNumber}]`;
+      }
+      logEntry += ` ${text}\n`;
+      
+      // Write to file stream
+      logStream.write(logEntry);
+    });
+
+    // Listen to page errors
+    page.on('pageerror', error => {
+      const timestamp = new Date().toISOString();
+      const logEntry = `[${timestamp}] [ERROR] ${error.message}\n${error.stack || ''}\n`;
+      logStream.write(logEntry);
+    });
+
+    // Listen to request failures
+    page.on('requestfailed', request => {
+      const timestamp = new Date().toISOString();
+      const logEntry = `[${timestamp}] [REQUEST_FAILED] ${request.failure()?.errorText} - ${request.url()}\n`;
+      logStream.write(logEntry);
+    });
+
+    console.error(`Console logging enabled for session ${sessionId}, page ${pageId}: ${logFilePath}`);
+  }
+
+  // Close log streams for a session
+  private closeLogStreams(sessionId: string) {
+    const session = this.sessions.get(sessionId);
+    if (session && session.logStreams) {
+      session.logStreams.forEach((stream, pageId) => {
+        stream.write(`\n=== Console Log Ended: ${new Date().toISOString()} ===\n`);
+        stream.end();
+      });
+      session.logStreams.clear();
+    }
   }
 
   private getPage(sessionId: string, pageId: string): Page {
