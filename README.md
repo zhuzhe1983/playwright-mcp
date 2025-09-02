@@ -23,11 +23,20 @@ An MCP (Model Context Protocol) server that provides browser automation capabili
 - Create regression tests from current page state
 - Build comprehensive test suites
 
-### 🔧 Resource Management (v1.1.0)
+### 🔧 Resource Management
 - Automatic session timeout (30 minutes by default)
 - Memory usage monitoring and cleanup
 - Zombie process detection and removal
 - Graceful shutdown handling
+
+### 📊 Console Logging (v1.1.0 - NEW!)
+- Real-time capture of browser console output
+- Logs saved to `playwright/log/` directory
+- Captures console.log, info, warn, error, debug messages
+- Includes timestamps and source code locations
+- Records page errors with stack traces
+- Tracks failed network requests
+- Supports live monitoring with `tail -f`
 
 ## Installation
 
@@ -132,6 +141,40 @@ browser_close({
 })
 ```
 
+### Console Logging (NEW in v1.1.0)
+
+Console logs are automatically captured for every browser session and saved to the `playwright/log/` directory.
+
+```bash
+# Log files are created automatically with the format:
+# playwright/log/console-{sessionId}-{pageId}-{timestamp}.log
+
+# Monitor logs in real-time
+tail -f playwright/log/console-*.log
+
+# View specific session logs
+tail -f playwright/log/console-my-session-main-*.log
+
+# Search for errors
+grep ERROR playwright/log/console-*.log
+
+# Filter by timestamp
+grep "2025-01-02T15:30" playwright/log/console-*.log
+```
+
+Example log output:
+```
+=== Console Log Started: 2025-01-02T15:30:45.123Z ===
+Session: my-session, Page: main
+URL: https://example.com
+==================================================
+
+[2025-01-02T15:30:45.456Z] [LOG] Page loaded successfully
+[2025-01-02T15:30:45.789Z] [WARN] [https://example.com/app.js:42:15] Deprecation warning
+[2025-01-02T15:30:46.123Z] [ERROR] [https://example.com/app.js:58:10] ReferenceError: undefined variable
+[2025-01-02T15:30:46.456Z] [REQUEST_FAILED] net::ERR_CONNECTION_REFUSED - https://api.example.com/data
+```
+
 ### Test Generation
 
 ```javascript
@@ -158,6 +201,19 @@ session_stats()
 
 // Close all browsers and cleanup
 browser_close_all()
+```
+
+## Directory Structure
+
+All generated files are organized under the `playwright/` directory in your project:
+
+```
+your-project/
+└── playwright/
+    ├── screenshot/     # Screenshots from page_screenshot
+    ├── test/          # Generated test scripts
+    └── log/           # Console logs (auto-created for each session)
+        └── console-{sessionId}-{pageId}-{timestamp}.log
 ```
 
 ## Available Tools
